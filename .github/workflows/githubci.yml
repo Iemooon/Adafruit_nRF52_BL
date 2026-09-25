@@ -1,19 +1,45 @@
 name: Build
 
+# ---------------------------------------------------------------------------
+# Manual-only build workflow.
+#
+# All automatic triggers (pull_request / push / release) were removed on
+# purpose: this fork must never spend CI minutes on its own. A build happens
+# only when someone opens the Actions tab and presses "Run workflow".
+#
+# When you do run it, you choose what gets built:
+#   board = bluemicro_nrf52833,nice_nano,pca10059   -> those three (the default)
+#   board = bluemicro_nrf52833                      -> just one
+#   board = all                                     -> every board under src/boards/
+#   board = (left empty)                            -> the default three
+#
+# The build steps themselves are the stock upstream ones, so the resulting
+# binaries stay comparable with official releases.
+# ---------------------------------------------------------------------------
+
 on:
   workflow_dispatch:
-  pull_request:
-  push:
-    branches: [ master ]
-  release:
-    types:
-      - created
+    inputs:
+      board:
+        description: 'Board(s) to build: comma/space separated names, or "all"'
+        required: true
+        default: 'bluemicro_nrf52833,nice_nano,pca10059'
+        type: string
+      artifact_prefix:
+        description: 'Optional prefix for artifact names (leave empty for none)'
+        required: false
+        default: ''
+        type: string
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
+  # -------------------------------------------------------------------------
+  # Turn the manual input into the JSON array the build matrix expects, and
+  # reject unknown board names here rather than deep inside a build job.
+  # -------------------------------------------------------------------------
   set-matrix:
     runs-on: ubuntu-latest
     outputs:
@@ -26,7 +52,38 @@ jobs:
         id: set-matrix
         working-directory: src/boards
         run: |
-          MATRIX_JSON=$(ls -d */ | sed 's/\/$//' | jq -R -s -c 'split("\n")[:-1]')
+          set -eu
+
+          # Every board that actually exists, one per line.
+          AVAILABLE=$(ls -d */ | sed 's/\/$//')
+
+          REQUESTED="${{ inputs.board }}"
+          [ -n "$REQUESTED" ] || REQUESTED="bluemicro_nrf52833,nice_nano,pca10059"
+
+          if [ "$REQUESTED" = "all" ]; then
+            SELECTED="$AVAILABLE"
+            echo "Building ALL boards."
+          else
+            # Split on commas and/or whitespace, drop empties.
+            SELECTED=$(echo "$REQUESTED" | tr ',' '\n' | tr -s '[:space:]' '\n' | sed '/^$/d')
+          fi
+
+          # Validate every requested name against the real directory list.
+          MISSING=""
+          for b in $SELECTED; do
+            if ! echo "$AVAILABLE" | grep -qx "$b"; then
+              MISSING="$MISSING $b"
+            fi
+          done
+
+          if [ -n "$MISSING" ]; then
+            echo "::error::Unknown board(s):$MISSING"
+            echo "Available boards:"
+            echo "$AVAILABLE"
+            exit 1
+          fi
+
+          MATRIX_JSON=$(echo "$SELECTED" | jq -R -s -c 'split("\n") | map(select(length > 0))')
           echo "matrix=$MATRIX_JSON"
           echo "matrix=$MATRIX_JSON" >> $GITHUB_OUTPUT
 
@@ -41,7 +98,11 @@ jobs:
     - name: Checkout Code
       uses: actions/checkout@v4
       with:
+        # Full history: the Makefile takes the version from
+        # `git describe --dirty --always --tags`.
         fetch-depth: 0
+        # Top-level submodules only -- never 'recursive', lib/tinyusb carries
+        # dozens of unrelated vendor SDK submodules.
         submodules: true
 
     - name: Install ARM GCC
@@ -58,16 +119,11 @@ jobs:
         make BOARD=${{ matrix.board }} all
         make BOARD=${{ matrix.board }} copy-artifact
 
+    - name: Show what was produced
+      run: |
+        ls -l _bin/${{ matrix.board }}
+
     - uses: actions/upload-artifact@v4
       with:
-        name: ${{ matrix.board }}
+        name: ${{ inputs.artifact_prefix }}${{ matrix.board }}
         path: _bin/${{ matrix.board }}
-
-    - name: Upload Release Asset
-      uses: softprops/action-gh-release@v1
-      if: ${{ github.event_name == 'release' }}
-      with:
-        files: |
-          _bin/${{ matrix.board }}/${{ matrix.board }}_bootloader-*.zip
-          _bin/${{ matrix.board }}/${{ matrix.board }}_bootloader-*.hex
-          _bin/${{ matrix.board }}/update-${{ matrix.board }}_bootloader-*.uf2
