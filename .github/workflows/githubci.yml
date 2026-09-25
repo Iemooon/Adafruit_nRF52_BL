@@ -116,8 +116,36 @@ jobs:
 
     - name: Build
       run: |
-        make BOARD=${{ matrix.board }} all
-        make BOARD=${{ matrix.board }} copy-artifact
+        # Label outputs as "<latest tag>-capy" so the produced files are
+        # self-identifying. The leading MAJOR.MINOR.PATCH is preserved because
+        # the Makefile parses it into the bootloader version (0.11.0 -> 0/11/0).
+        BASE_VER=$(git describe --tags --abbrev=0 2>/dev/null || echo "0.0.0")
+        VER="${BASE_VER}-capy"
+        echo "Building with GIT_VERSION=${VER}"
+        make BOARD=${{ matrix.board }} GIT_VERSION="${VER}" all
+        make BOARD=${{ matrix.board }} GIT_VERSION="${VER}" copy-artifact
+
+    - name: Collect the no-SoftDevice hex
+      # copy-artifact ships only what a board already running an Adafruit
+      # bootloader consumes: the merged SoftDevice hex, its DFU zip, and the
+      # bootloader self-update uf2. A board still on its FACTORY Nordic
+      # bootloader - which is exactly what this fork's PCA10059 dongle is -
+      # needs <OUT_NAME>_nosd.hex too, and cannot use any of the other three:
+      #
+      #   * a factory Nordic bootloader launches the application at 0x1000
+      #     because there is no SoftDevice, while the merged hex is built with
+      #     one and puts the application at 0x26000;
+      #   * update-*_nosd.uf2 carries family 0xd663823c and is a bootloader
+      #     self-update, accepted only by an Adafruit bootloader already in
+      #     place.
+      #
+      # The _nosd hex is bootloader + MBR and nothing else - precisely the
+      # layout a no-SD application such as the KeyPoint NMK receiver is linked
+      # for (0x1000/636K). `all` builds it (Makefile:461) and `make flash`
+      # flashes it (Makefile:550); nothing had copied it into the artifact.
+      run: |
+        cp _build/build-${{ matrix.board }}/*_nosd.hex _bin/${{ matrix.board }}/
+        ls -l _bin/${{ matrix.board }}/*_nosd.hex
 
     - name: Show what was produced
       run: |
