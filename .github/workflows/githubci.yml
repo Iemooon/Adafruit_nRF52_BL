@@ -13,6 +13,13 @@ name: Build
 #   board = all                                     -> every board under src/boards/
 #   board = (left empty)                            -> the default three
 #
+# volume_labels picks the UF2 drive name baked into the firmware:
+#   volume_labels = KEYPOINT         -> one build; the drive shows KEYPOINT
+#   volume_labels = KEYPOINT,NRF52BOOT -> two builds, one subdirectory each
+#   volume_labels = (left empty)     -> one build; the drive shows NRF52BOOT
+# The label is a compile-time macro, so every label in the list costs one full
+# rebuild. Each board's artifact gets one subdirectory per label.
+#
 # The build steps themselves are the stock upstream ones, so the resulting
 # binaries stay comparable with official releases.
 # ---------------------------------------------------------------------------
@@ -24,6 +31,11 @@ on:
         description: 'Board(s) to build: comma/space separated names, or "all"'
         required: true
         default: 'bluemicro_nrf52833,nice_nano,pca10059'
+        type: string
+      volume_labels:
+        description: 'UF2 volume label(s): comma/space separated, max 11 chars each (e.g. KEYPOINT). Empty = NRF52BOOT'
+        required: false
+        default: ''
         type: string
       artifact_prefix:
         description: 'Optional prefix for artifact names (leave empty for none)'
@@ -37,8 +49,8 @@ concurrency:
 
 jobs:
   # -------------------------------------------------------------------------
-  # Turn the manual input into the JSON array the build matrix expects, and
-  # reject unknown board names here rather than deep inside a build job.
+  # Turn the manual inputs into the JSON array the build matrix expects, and
+  # reject bad input here rather than deep inside a build job.
   # -------------------------------------------------------------------------
   set-matrix:
     runs-on: ubuntu-latest
@@ -87,6 +99,27 @@ jobs:
           echo "matrix=$MATRIX_JSON"
           echo "matrix=$MATRIX_JSON" >> $GITHUB_OUTPUT
 
+      - name: Check volume labels
+        # Checked once, up front, so a bad label fails immediately instead of
+        # after every board in the matrix has burned a full build.
+        #
+        # 11 characters is the hard ceiling: ghostfat.c initialises
+        # `uint8_t VolumeLabel[11]` straight from UF2_VOLUME_LABEL
+        # (src/usb/uf2/ghostfat.c:209), so anything longer is a compile error.
+        # Shorter names are zero-padded by the C initialiser, which is what
+        # the stock "NRF52BOOT  " default relies on too.
+        run: |
+          set -eu
+          LABELS=$(echo "${{ inputs.volume_labels }}" | tr ',' '\n' | tr -s '[:space:]' '\n' | sed '/^$/d')
+          [ -n "$LABELS" ] || LABELS="NRF52BOOT"
+          for L in $LABELS; do
+            if [ ${#L} -gt 11 ]; then
+              echo "::error::Volume label '$L' is ${#L} characters long; the maximum is 11."
+              exit 1
+            fi
+            echo "Volume label OK: $L"
+          done
+
   build:
     needs: set-matrix
     runs-on: ubuntu-latest
@@ -98,8 +131,7 @@ jobs:
     - name: Checkout Code
       uses: actions/checkout@v4
       with:
-        # Full history: the Makefile takes the version from
-        # `git describe --dirty --always --tags`.
+        # Full history: the version comes from `git describe --tags`.
         fetch-depth: 0
         # Top-level submodules only -- never 'recursive', lib/tinyusb carries
         # dozens of unrelated vendor SDK submodules.
@@ -116,42 +148,86 @@ jobs:
 
     - name: Build
       run: |
-        # Label outputs as "<latest tag>-capy" so the produced files are
-        # self-identifying. The leading MAJOR.MINOR.PATCH is preserved because
-        # the Makefile parses it into the bootloader version (0.11.0 -> 0/11/0).
-        BASE_VER=$(git describe --tags --abbrev=0 2>/dev/null || echo "0.0.0")
-        VER="${BASE_VER}-capy"
-        echo "Building with GIT_VERSION=${VER}"
-        make BOARD=${{ matrix.board }} GIT_VERSION="${VER}" all
-        make BOARD=${{ matrix.board }} GIT_VERSION="${VER}" copy-artifact
+        set -eu
 
-    - name: Collect the no-SoftDevice hex
-      # copy-artifact ships only what a board already running an Adafruit
-      # bootloader consumes: the merged SoftDevice hex, its DFU zip, and the
-      # bootloader self-update uf2. A board still on its FACTORY Nordic
-      # bootloader - which is exactly what this fork's PCA10059 dongle is -
-      # needs <OUT_NAME>_nosd.hex too, and cannot use any of the other three:
-      #
-      #   * a factory Nordic bootloader launches the application at 0x1000
-      #     because there is no SoftDevice, while the merged hex is built with
-      #     one and puts the application at 0x26000;
-      #   * update-*_nosd.uf2 carries family 0xd663823c and is a bootloader
-      #     self-update, accepted only by an Adafruit bootloader already in
-      #     place.
-      #
-      # The _nosd hex is bootloader + MBR and nothing else - precisely the
-      # layout a no-SD application such as the KeyPoint NMK receiver is linked
-      # for (0x1000/636K). `all` builds it (Makefile:461) and `make flash`
-      # flashes it (Makefile:550); nothing had copied it into the artifact.
-      run: |
-        cp _build/build-${{ matrix.board }}/*_nosd.hex _bin/${{ matrix.board }}/
-        ls -l _bin/${{ matrix.board }}/*_nosd.hex
+        # ---- Version ------------------------------------------------------
+        # Take MAJOR.MINOR.PATCH from the newest reachable tag and tag our
+        # build "-capy", so the artifacts stay self-identifying while the
+        # version still tracks the upstream release they derive from.
+        #
+        # The hard failure below is deliberate. `git describe` falls back to a
+        # bare commit hash when no tag is reachable, and the Makefile's
+        # MAJOR.MINOR.PATCH sed then silently yields 0.0.0. Failing loudly
+        # here is the only way to keep that from shipping unnoticed.
+        BASE_VER=$(git describe --tags --abbrev=0 2>/dev/null || true)
+        if ! echo "$BASE_VER" | grep -Eq '^v?[0-9]+\.[0-9]+\.[0-9]+$'; then
+          echo "::error::Cannot derive MAJOR.MINOR.PATCH from 'git describe --tags --abbrev=0' (got '${BASE_VER}'), which would silently produce a 0.0.0 bootloader version. Refusing to build."
+          exit 1
+        fi
+        VER="${BASE_VER}-capy"
+        echo "Building BOARD=${{ matrix.board }} with GIT_VERSION=${VER}"
+
+        # ---- Volume labels ------------------------------------------------
+        # An empty input means the generic label, spelled out explicitly so
+        # the result does not depend on whatever a board header happens to
+        # declare.
+        LABELS=$(echo "${{ inputs.volume_labels }}" | tr ',' '\n' | tr -s '[:space:]' '\n' | sed '/^$/d')
+        [ -n "$LABELS" ] || LABELS="NRF52BOOT"
+
+        STAGE="_stage/${{ matrix.board }}"
+
+        # ---- Build, once per label ---------------------------------------
+        # Everything is staged under _stage/, i.e. outside both _build/ and
+        # _bin/. That matters because `make clean` removes both (Makefile:484
+        # -> BUILD and BIN), so staging inside either one would have each pass
+        # delete the previous pass's output.
+        for L in $LABELS; do
+          echo "::group::BOARD=${{ matrix.board }} VOLUME_LABEL=$L"
+
+          # The label is baked in at compile time and make cannot see CFLAGS
+          # change, so the build tree has to be wiped to force a real rebuild.
+          make clean
+          make BOARD=${{ matrix.board }} VOLUME_LABEL="$L" GIT_VERSION="${VER}" all
+
+          # Collect the bootloader+MBR hex, the merged SoftDevice hex, and the
+          # bootloader self-update uf2.
+          #
+          # The no-SD hex is the piece an upstream Adafruit release does not
+          # hand you. `make copy-artifact` ships only what a board already
+          # running an Adafruit bootloader consumes, and a board still on its
+          # FACTORY Nordic bootloader - which is exactly what the PCA10059
+          # dongle is - can use none of those three:
+          #
+          #   * a factory Nordic bootloader launches the application at 0x1000
+          #     because there is no SoftDevice, while the merged hex is built
+          #     with one and places the application at 0x26000;
+          #   * update-*_nosd.uf2 carries family 0xd663823c and is a bootloader
+          #     self-update, accepted only by an Adafruit bootloader already in
+          #     place.
+          #
+          # The _nosd hex is bootloader + MBR and nothing else - precisely the
+          # layout a no-SD application such as the KeyPoint NMK receiver is
+          # linked for (0x1000/636K). `all` builds it (Makefile:471) and
+          # `make flash` flashes it (Makefile:550).
+          #
+          # $(MERGED_FILE).zip is deliberately dropped. That is the Nordic DFU
+          # package for OTA/Bluetooth updates, and nothing here uses it: these
+          # boards get flashed over SWD, or by dragging a hex/uf2 onto the
+          # bootloader. `make all` still builds the zip, it just never reaches
+          # the artifact.
+          mkdir -p "$STAGE/$L"
+          cp _build/build-${{ matrix.board }}/*.hex "$STAGE/$L"/
+          cp _build/build-${{ matrix.board }}/*.uf2 "$STAGE/$L"/
+
+          ls -l "$STAGE/$L"
+          echo "::endgroup::"
+        done
 
     - name: Show what was produced
       run: |
-        ls -l _bin/${{ matrix.board }}
+        find _stage -type f | sort
 
     - uses: actions/upload-artifact@v4
       with:
         name: ${{ inputs.artifact_prefix }}${{ matrix.board }}
-        path: _bin/${{ matrix.board }}
+        path: _stage/${{ matrix.board }}
