@@ -196,7 +196,11 @@ jobs:
 
           # The label is baked in at compile time and make cannot see CFLAGS
           # change, so the build tree has to be wiped to force a real rebuild.
-          make clean
+          #
+          # BOARD goes on this line too. Without it no board.mk is included,
+          # MCU_SUB_VARIANT stays empty, and the Makefile stops at its own
+          # sanity check (Makefile:144) before deleting anything.
+          make BOARD=${{ matrix.board }} clean
           make BOARD=${{ matrix.board }} VOLUME_LABEL="$L" GIT_VERSION="${VER}" all
 
           # Collect the bootloader+MBR hex, the merged SoftDevice hex, and the
