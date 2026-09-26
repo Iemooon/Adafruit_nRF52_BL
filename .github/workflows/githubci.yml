@@ -18,7 +18,11 @@ name: Build
 #   volume_labels = KEYPOINT,NRF52BOOT -> two builds, one subdirectory each
 #   volume_labels = (left empty)     -> one build; the drive shows NRF52BOOT
 # The label is a compile-time macro, so every label in the list costs one full
-# rebuild. Each board's artifact gets one subdirectory per label.
+# rebuild. Each board's artifact gets one subdirectory per label, and the label
+# is appended to the version as well, so the file names separate them too:
+#   pca10059_bootloader-0.11.0-capy-KEYPOINT_nosd.hex
+# A label must be 1-11 characters of A-Z a-z 0-9 . _ - and start with a letter
+# or a digit; anything else is rejected before the build starts.
 #
 # The build steps themselves are the stock upstream ones, so the resulting
 # binaries stay comparable with official releases.
@@ -108,13 +112,28 @@ jobs:
         # (src/usb/uf2/ghostfat.c:209), so anything longer is a compile error.
         # Shorter names are zero-padded by the C initialiser, which is what
         # the stock "NRF52BOOT  " default relies on too.
+        #
+        # The character set is restricted as well. The label is not only a FAT
+        # field: it is appended to the version, which carries it into the
+        # INFO_UF2.TXT text, into a -D C string literal, and into the artifact
+        # file name. A quote or a slash would break one of those.
+        env:
+          # Passed through the environment rather than interpolated into the
+          # script. ${{ }} is textual substitution, so a label containing a
+          # quote would break the shell before the checks below could reject
+          # it; through env it is only data, and the checks get to decide.
+          VOLUME_LABELS: ${{ inputs.volume_labels }}
         run: |
           set -eu
-          LABELS=$(echo "${{ inputs.volume_labels }}" | tr ',' '\n' | tr -s '[:space:]' '\n' | sed '/^$/d')
+          LABELS=$(echo "$VOLUME_LABELS" | tr ',' '\n' | tr -s '[:space:]' '\n' | sed '/^$/d')
           [ -n "$LABELS" ] || LABELS="NRF52BOOT"
           for L in $LABELS; do
             if [ ${#L} -gt 11 ]; then
               echo "::error::Volume label '$L' is ${#L} characters long; the maximum is 11."
+              exit 1
+            fi
+            if ! echo "$L" | grep -Eq '^[A-Za-z0-9][A-Za-z0-9._-]*$'; then
+              echo "::error::Volume label '$L' contains characters that cannot be used. Allowed: A-Z a-z 0-9 . _ - and it must start with a letter or a digit."
               exit 1
             fi
             echo "Volume label OK: $L"
@@ -157,6 +176,9 @@ jobs:
         pip3 install adafruit-nrfutil uritemplate requests intelhex setuptools
 
     - name: Build
+      env:
+        # Data, not code -- see the note on the same input in set-matrix.
+        VOLUME_LABELS: ${{ inputs.volume_labels }}
       run: |
         set -eu
 
@@ -164,6 +186,10 @@ jobs:
         # Take MAJOR.MINOR.PATCH from the newest reachable tag and tag our
         # build "-capy", so the artifacts stay self-identifying while the
         # version still tracks the upstream release they derive from.
+        #
+        # The volume label is appended to it per build, inside the loop below.
+        # One run yields one image per label, and without the label the files
+        # for two labels of the same board would be indistinguishable by name.
         #
         # The hard failure below is deliberate. `git describe` falls back to a
         # bare commit hash when no tag is reachable, and the Makefile's
@@ -174,14 +200,11 @@ jobs:
           echo "::error::Cannot derive MAJOR.MINOR.PATCH from 'git describe --tags --abbrev=0' (got '${BASE_VER}'), which would silently produce a 0.0.0 bootloader version. Refusing to build."
           exit 1
         fi
-        VER="${BASE_VER}-capy"
-        echo "Building BOARD=${{ matrix.board }} with GIT_VERSION=${VER}"
-
         # ---- Volume labels ------------------------------------------------
         # An empty input means the generic label, spelled out explicitly so
         # the result does not depend on whatever a board header happens to
         # declare.
-        LABELS=$(echo "${{ inputs.volume_labels }}" | tr ',' '\n' | tr -s '[:space:]' '\n' | sed '/^$/d')
+        LABELS=$(echo "$VOLUME_LABELS" | tr ',' '\n' | tr -s '[:space:]' '\n' | sed '/^$/d')
         [ -n "$LABELS" ] || LABELS="NRF52BOOT"
 
         STAGE="_stage/${{ matrix.board }}"
@@ -192,7 +215,15 @@ jobs:
         # -> BUILD and BIN), so staging inside either one would have each pass
         # delete the previous pass's output.
         for L in $LABELS; do
-          echo "::group::BOARD=${{ matrix.board }} VOLUME_LABEL=$L"
+          # The label rides along in the version, so it reaches three places
+          # at once: the artifact file name (Makefile:64 OUT_NAME =
+          # BOARD_bootloader-GIT_VERSION), the INFO_UF2.TXT text the drive
+          # shows (ghostfat.c:128), and the BLE DIS firmware revision string
+          # (Makefile:363). None of those caps the length -- ble_dis.c:143
+          # sizes its attribute to whatever string it is handed -- so this is
+          # safe, but it does mean a host reading the version sees the label.
+          VER="${BASE_VER}-capy-${L}"
+          echo "::group::BOARD=${{ matrix.board }} VOLUME_LABEL=$L GIT_VERSION=$VER"
 
           # The label is baked in at compile time and make cannot see CFLAGS
           # change, so the build tree has to be wiped to force a real rebuild.
