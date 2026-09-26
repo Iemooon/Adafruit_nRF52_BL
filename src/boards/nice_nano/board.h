@@ -53,7 +53,7 @@
 #define USB_DESC_CDC_ONLY_PID 0x00B3
 
 #define UF2_PRODUCT_NAME      "nice!nano"
-#define UF2_VOLUME_LABEL      "WK_840"
+#define UF2_VOLUME_LABEL      "KEYPOINT"
 #define UF2_BOARD_ID          "nRF52840-nicenano"
 #define UF2_INDEX_URL         "https://nicekeyboards.com/docs/nice-nano"
 
