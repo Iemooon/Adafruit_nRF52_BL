@@ -362,6 +362,16 @@ CFLAGS += -DSOFTDEVICE_PRESENT
 CFLAGS += -DUF2_VERSION='"$(GIT_VERSION)"'
 CFLAGS += -DBLEDIS_FW_VERSION='"$(GIT_VERSION) $(SD_NAME) $(SD_VERSION)"'
 
+# UF2 volume label = the drive name shown in UF2 (drag-and-drop) mode.
+# Leave VOLUME_LABEL unset to keep whatever the board header declares
+# ("NRF52BOOT" for boards that declare nothing).
+#   make BOARD=nice_nano VOLUME_LABEL=KEYPOINT all
+# The macro is applied in boards.h after "board.h" is included, so it works
+# for every board and never triggers a "macro redefined" warning.
+ifneq ($(VOLUME_LABEL),)
+  CFLAGS += -DUF2_VOLUME_LABEL_OVERRIDE='"$(VOLUME_LABEL)"'
+endif
+
 ifeq ($(SIGNED_FW), 1)
 CFLAGS += -DSIGNED_FW
 CFLAGS += -DSIGNED_FW_QX='$(SIGNED_FW_QX)'

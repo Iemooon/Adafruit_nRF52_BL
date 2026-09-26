@@ -59,7 +59,6 @@
 #define USB_DESC_CDC_ONLY_PID 0x616f
 
 #define UF2_PRODUCT_NAME      "BlueMicro"
-#define UF2_VOLUME_LABEL      "WK_833"
 #define UF2_BOARD_ID          "nRF52833-BlueMicro-v1"
 #define UF2_INDEX_URL         "http://bluemicro.jpconstantineau.com/"
 

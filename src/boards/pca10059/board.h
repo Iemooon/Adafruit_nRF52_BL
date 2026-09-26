@@ -57,7 +57,6 @@
 #define USB_DESC_CDC_ONLY_PID 0x0029
 
 #define UF2_PRODUCT_NAME      "Nordic nRF52840 Dongle"
-#define UF2_VOLUME_LABEL      "CAPYDFU"
 #define UF2_BOARD_ID          "nRF52840-pca10059-v1"
 #define UF2_INDEX_URL         "https://www.nordicsemi.com/Software-and-Tools/Development-Kits/nRF52840-Dongle"
 

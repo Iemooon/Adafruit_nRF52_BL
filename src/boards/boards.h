@@ -34,6 +34,17 @@
 #define PINNUM(port, pin) ((port) * 32 + (pin))
 #include "board.h"
 
+// The UF2 volume label is the drive name shown while the bootloader sits in
+// UF2 drag-and-drop mode. A build may override the board's choice from the
+// command line -- and this works for every board, whether or not its board.h
+// defines a label, and without any "macro redefined" warning:
+//   make BOARD=nice_nano VOLUME_LABEL=KEYPOINT all
+#ifdef UF2_VOLUME_LABEL_OVERRIDE
+#undef  UF2_VOLUME_LABEL
+#define UF2_VOLUME_LABEL   UF2_VOLUME_LABEL_OVERRIDE
+#endif
+
+// Fall back to the generic label when neither the board nor the build sets one.
 #ifndef UF2_VOLUME_LABEL
 #define UF2_VOLUME_LABEL   "NRF52BOOT  "
 #endif
