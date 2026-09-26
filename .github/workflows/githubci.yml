@@ -131,8 +131,18 @@ jobs:
     - name: Checkout Code
       uses: actions/checkout@v4
       with:
-        # Full history: the version comes from `git describe --tags`.
+        # Full history plus tags: the version comes from `git describe --tags`,
+        # which needs a tag reachable from the checked-out commit.
+        #
+        # Fetching tags explicitly because the reference point is a tag that
+        # lives upstream. GitHub does not give a fork its parent's tags, so a
+        # fresh clone of this fork has none at all, `git describe` then falls
+        # back to a bare commit hash, and the Makefile's MAJOR.MINOR.PATCH
+        # parser turns that into 0.0.0 -- which is exactly how the version
+        # used to collapse. The upstream tags this build needs must therefore
+        # be pushed to the fork.
         fetch-depth: 0
+        fetch-tags: true
         # Top-level submodules only -- never 'recursive', lib/tinyusb carries
         # dozens of unrelated vendor SDK submodules.
         submodules: true
