@@ -360,12 +360,19 @@ static uint32_t ble_stack_init(void) {
   // Forward vector table to bootloader address so that we can handle BLE events
   sd_softdevice_vector_table_base_set(BOOTLOADER_REGION_START);
 
-  // Enable Softdevice, Use Internal OSC to compatible with all boards
+  // Use RC by default; boards without LFXO may synthesize LFCLK from HFXO.
   nrf_clock_lf_cfg_t clock_cfg = {
+  #if defined(BOARD_LFCLK_SYNTH) && BOARD_LFCLK_SYNTH
+      .source       = NRF_CLOCK_LF_SRC_SYNTH,
+      .rc_ctiv      = 0,
+      .rc_temp_ctiv = 0,
+      .accuracy     = NRF_CLOCK_LF_ACCURACY_250_PPM
+  #else
       .source       = NRF_CLOCK_LF_SRC_RC,
       .rc_ctiv      = 16,
       .rc_temp_ctiv = 2,
       .accuracy     = NRF_CLOCK_LF_ACCURACY_250_PPM
+  #endif
   };
   #ifdef ANT_LICENSE_KEY
     sd_softdevice_enable(&clock_cfg, app_error_fault_handler, ANT_LICENSE_KEY);
