@@ -43,16 +43,19 @@
 // BLE OTA
 //--------------------------------------------------------------------+
 #define BLEDIS_MANUFACTURER "Nice Keyboards"
-#define BLEDIS_MODEL        "nice!nano"
+#define BLEDIS_MODEL        "CAPYDFU"
 
 //--------------------------------------------------------------------+
 // USB
 //--------------------------------------------------------------------+
 #define USB_DESC_VID          0x239A
-#define USB_DESC_UF2_PID      0x00B3
-#define USB_DESC_CDC_ONLY_PID 0x00B3
+// Retain the user's installed Rasi bootloader identity for UF2 self-update.
+#define USB_DESC_UF2_PID      0x0029
+#define USB_DESC_CDC_ONLY_PID 0x0029
 
-#define UF2_PRODUCT_NAME      "nice!nano"
+#define UF2_PRODUCT_NAME      "CAPYDFU"
+#define UF2_VOLUME_LABEL      "CAPYDFU    "
+#define UF2_MSC_PRODUCT       "CAPYDFU"
 #define UF2_BOARD_ID          "nRF52840-nicenano"
 #define UF2_INDEX_URL         "https://nicekeyboards.com/docs/nice-nano"
 

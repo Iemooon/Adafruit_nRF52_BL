@@ -52,7 +52,11 @@ void tud_msc_inquiry_cb(uint8_t lun, uint8_t vendor_id[8], uint8_t product_id[16
   (void) lun;
 
   const char vid[] = "Adafruit";
+#ifdef UF2_MSC_PRODUCT
+  const char pid[] = UF2_MSC_PRODUCT;
+#else
   const char pid[] = "nRF UF2";
+#endif
   const char rev[] = "1.0";
 
   memcpy(vendor_id  , vid, strlen(vid));
