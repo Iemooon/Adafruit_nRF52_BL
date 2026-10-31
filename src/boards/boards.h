@@ -34,6 +34,17 @@
 #define PINNUM(port, pin) ((port) * 32 + (pin))
 #include "board.h"
 
+// A workflow build may provide one name for both the UF2 drive and the
+// device-facing product strings. Keep board defaults when it is unset.
+#ifdef UF2_DEVICE_NAME_OVERRIDE
+#undef  BLEDIS_MODEL
+#define BLEDIS_MODEL       UF2_DEVICE_NAME_OVERRIDE
+#undef  UF2_PRODUCT_NAME
+#define UF2_PRODUCT_NAME   UF2_DEVICE_NAME_OVERRIDE
+#undef  UF2_MSC_PRODUCT
+#define UF2_MSC_PRODUCT    UF2_DEVICE_NAME_OVERRIDE
+#endif
+
 // The UF2 volume label is the drive name shown while the bootloader sits in
 // UF2 drag-and-drop mode. A build may override the board's choice from the
 // command line -- and this works for every board, whether or not its board.h

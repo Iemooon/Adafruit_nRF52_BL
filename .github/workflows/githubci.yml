@@ -37,7 +37,7 @@ on:
         default: 'bluemicro_nrf52833,nice_nano,pca10059'
         type: string
       volume_labels:
-        description: 'UF2 volume label(s): comma/space separated, max 11 chars each (e.g. KEYPOINT). Empty = NRF52BOOT'
+        description: 'UF2 and device name(s): comma/space separated, max 11 chars each (e.g. CAPYDFU). Empty = NRF52BOOT'
         required: false
         default: ''
         type: string
@@ -215,13 +215,9 @@ jobs:
         # -> BUILD and BIN), so staging inside either one would have each pass
         # delete the previous pass's output.
         for L in $LABELS; do
-          # The label rides along in the version, so it reaches three places
-          # at once: the artifact file name (Makefile:64 OUT_NAME =
-          # BOARD_bootloader-GIT_VERSION), the INFO_UF2.TXT text the drive
-          # shows (ghostfat.c:128), and the BLE DIS firmware revision string
-          # (Makefile:363). None of those caps the length -- ble_dis.c:143
-          # sizes its attribute to whatever string it is handed -- so this is
-          # safe, but it does mean a host reading the version sees the label.
+          # The label is used as the drive label and, through the Makefile,
+          # as the USB/BLE product name and INFO_UF2 Model. It also rides
+          # along in the version and artifact file name.
           VER="${BASE_VER}-capy-${L}"
           echo "::group::BOARD=${{ matrix.board }} VOLUME_LABEL=$L GIT_VERSION=$VER"
 

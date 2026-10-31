@@ -363,6 +363,8 @@ CFLAGS += -DUF2_VERSION='"$(GIT_VERSION)"'
 CFLAGS += -DBLEDIS_FW_VERSION='"$(GIT_VERSION) $(SD_NAME) $(SD_VERSION)"'
 
 # UF2 volume label = the drive name shown in UF2 (drag-and-drop) mode.
+# When supplied, the same value also overrides the USB/BLE product name and
+# the INFO_UF2 Model string.
 # Leave VOLUME_LABEL unset to keep whatever the board header declares
 # ("NRF52BOOT" for boards that declare nothing).
 #   make BOARD=nice_nano VOLUME_LABEL=KEYPOINT all
@@ -370,6 +372,7 @@ CFLAGS += -DBLEDIS_FW_VERSION='"$(GIT_VERSION) $(SD_NAME) $(SD_VERSION)"'
 # for every board and never triggers a "macro redefined" warning.
 ifneq ($(VOLUME_LABEL),)
   CFLAGS += -DUF2_VOLUME_LABEL_OVERRIDE='"$(VOLUME_LABEL)"'
+  CFLAGS += -DUF2_DEVICE_NAME_OVERRIDE='"$(VOLUME_LABEL)"'
 endif
 
 ifeq ($(SIGNED_FW), 1)
