@@ -24,10 +24,13 @@
 
 #include "tusb.h"
 #include "uf2/uf2.h"
+#include "msc_uf2.h"
 
 #if CFG_TUD_MSC
 
 #include "bootloader.h"
+#include "app_timer.h"
+#include "flash_nrf5x.h"
 
 /*------------------------------------------------------------------*/
 /* MACRO TYPEDEF CONSTANT ENUM
@@ -37,6 +40,13 @@
 /* UF2
  *------------------------------------------------------------------*/
 static WriteState _wr_state = { 0 };
+static bool _completion_pending;
+static bool _completion_sent;
+static bool _write_active;
+static uint32_t _last_write_complete;
+
+// Allow host-side file close / FAT writes after the final UF2 WRITE10 CSW.
+#define UF2_FINISH_IDLE_MS 1000
 
 void read_block(uint32_t block_no, uint8_t *data);
 int  write_block(uint32_t block_no, uint8_t *data, WriteState *state);
@@ -78,13 +88,17 @@ bool tud_msc_test_unit_ready_cb(uint8_t lun)
 int32_t tud_msc_scsi_cb (uint8_t lun, uint8_t const scsi_cmd[16], void* buffer, uint16_t bufsize)
 {
   void const* response = NULL;
-  uint16_t resplen = 0;
+  int32_t resplen = 0;
 
   // most scsi handled is input
   bool in_xfer = true;
 
   switch (scsi_cmd[0])
   {
+    case 0x35: // SYNCHRONIZE CACHE(10): all accepted flash writes are synchronous.
+      flash_nrf5x_flush(true);
+      return 0;
+
     case SCSI_CMD_PREVENT_ALLOW_MEDIUM_REMOVAL:
       // Host is about to read/write etc ... better not to disconnect disk
       resplen = 0;
@@ -95,7 +109,7 @@ int32_t tud_msc_scsi_cb (uint8_t lun, uint8_t const scsi_cmd[16], void* buffer, 
       tud_msc_set_sense(lun, SCSI_SENSE_ILLEGAL_REQUEST, 0x20, 0x00);
 
       // negative means error -> tinyusb could stall and/or response with failed status
-      resplen = -1;
+      return -1;
     break;
   }
 
@@ -146,6 +160,9 @@ int32_t tud_msc_write10_cb (uint8_t lun, uint32_t lba, uint32_t offset, uint8_t*
 {
   (void) lun;
 
+  if (_completion_sent) return -1;
+  _write_active = true;
+
   uint32_t count = 0;
   while ( count < bufsize )
   {
@@ -176,6 +193,10 @@ void tud_msc_write10_complete_cb(uint8_t lun)
 {
   static bool first_write = true;
 
+  _write_active = false;
+  _last_write_complete = app_timer_cnt_get();
+  if (_completion_sent) return;
+
   // abort the DFU, uf2 block failed integrity check
   if ( _wr_state.aborted )
   {
@@ -203,50 +224,64 @@ void tud_msc_write10_complete_cb(uint8_t lun)
     // All block of uf2 file is complete --> complete DFU process
     if (_wr_state.numWritten >= _wr_state.numBlocks)
     {
-      dfu_update_status_t update_status;
-      memset(&update_status, 0, sizeof(dfu_update_status_t ));
-
-      if ( _wr_state.update_bootloader )
-      {
-        // update bootloader always end with reset
-        update_status.status_code = DFU_RESET;
-        update_status.restart_into_bootloader = false;
-
-        // Location of current stored new bootloader
-        uint32_t * new_bootloader = (uint32_t *) BOOTLOADER_ADDR_NEW_RECEIVED;
-
-        PRINT_HEX(new_bootloader);
-
-        // skip if there is no bootloader change
-        if ( memcmp(new_bootloader, (uint8_t*) BOOTLOADER_ADDR_START, DFU_BL_IMAGE_MAX_SIZE) )
-        {
-          PRINTF("Coyping new bootloader\r\n");
-
-          sd_mbr_command_t command =
-          {
-            .command = SD_MBR_COMMAND_COPY_BL,
-            .params.copy_bl.bl_src = new_bootloader,
-            .params.copy_bl.bl_len = DFU_BL_IMAGE_MAX_SIZE/4 // size in words
-          };
-
-          // on success, COPY_BL won't return but run the new bootloader right away.
-          sd_mbr_command(&command);
-        }
-
-        PRINTF("bootloader update complete\r\n");
-      }else
-      {
-        // update App
-        update_status.status_code = DFU_UPDATE_APP_COMPLETE;
-
-        PRINTF("Application update complete\r\n");
-      }
-
-      bootloader_dfu_update_process(update_status);
-
-      led_state(STATE_WRITING_FINISHED);
+      _completion_pending = true;
     }
   }
+}
+
+void msc_uf2_task(void)
+{
+  if (!_completion_pending || _completion_sent || _write_active || _wr_state.aborted) return;
+  if (app_timer_cnt_diff_compute(app_timer_cnt_get(), _last_write_complete) <
+      APP_TIMER_TICKS(UF2_FINISH_IDLE_MS)) return;
+
+  // The normal WRITE10 completion callback is still required. No missing-block
+  // or missing-CSW recovery is introduced here. Finalize only once.
+  _completion_sent = true;
+  _completion_pending = false;
+  flash_nrf5x_flush(true);
+  dfu_update_status_t update_status;
+  memset(&update_status, 0, sizeof(dfu_update_status_t ));
+
+  if ( _wr_state.update_bootloader )
+  {
+    // update bootloader always end with reset
+    update_status.status_code = DFU_RESET;
+    update_status.restart_into_bootloader = false;
+
+    // Location of current stored new bootloader
+    uint32_t * new_bootloader = (uint32_t *) BOOTLOADER_ADDR_NEW_RECEIVED;
+
+    PRINT_HEX(new_bootloader);
+
+    // skip if there is no bootloader change
+    if ( memcmp(new_bootloader, (uint8_t*) BOOTLOADER_ADDR_START, DFU_BL_IMAGE_MAX_SIZE) )
+    {
+      PRINTF("Coyping new bootloader\r\n");
+
+      sd_mbr_command_t command =
+      {
+        .command = SD_MBR_COMMAND_COPY_BL,
+        .params.copy_bl.bl_src = new_bootloader,
+        .params.copy_bl.bl_len = DFU_BL_IMAGE_MAX_SIZE/4 // size in words
+      };
+
+      // on success, COPY_BL won't return but run the new bootloader right away.
+      sd_mbr_command(&command);
+    }
+
+    PRINTF("bootloader update complete\r\n");
+  }else
+  {
+    // update App
+    update_status.status_code = DFU_UPDATE_APP_COMPLETE;
+
+    PRINTF("Application update complete\r\n");
+  }
+
+  bootloader_dfu_update_process(update_status);
+
+  led_state(STATE_WRITING_FINISHED);
 }
 
 // Invoked when received SCSI_CMD_READ_CAPACITY_10 and SCSI_CMD_READ_FORMAT_CAPACITY to determine the disk size
